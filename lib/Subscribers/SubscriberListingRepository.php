@@ -130,11 +130,18 @@ class SubscriberListingRepository extends ListingRepository {
       return;
     }
     if ($filters['segment'] === self::FILTER_WITHOUT_LIST) {
-      $queryBuilder->leftJoin('s.subscriberSegments', 'ssg', Join::WITH, (string)$queryBuilder->expr()->eq('ssg.status', ':statusSubscribed'))
-        ->leftJoin('ssg.segment', 'sg', Join::WITH, (string)$queryBuilder->expr()->isNull('sg.deletedAt'))
-        ->andWhere('s.deletedAt IS NULL')
-        ->andWhere('sg.id IS NULL')
-        ->setParameter('statusSubscribed', SubscriberEntity::STATUS_SUBSCRIBED);
+      $qbSubselect = $this->entityManager->createQueryBuilder();
+      $qbSubselect->select('s2.id')
+        ->from(SubscriberEntity::class, 's2')
+        ->leftJoin('s2.subscriberSegments', 'ssg2', Join::WITH, (string)$qbSubselect->expr()->eq('ssg2.status', ':subscribed'))
+        ->join('ssg2.segment', 'sg2', Join::WITH, (string)$qbSubselect->expr()->isNull('sg2.deletedAt'))
+        ->setParameter('subscribed', SubscriberEntity::STATUS_SUBSCRIBED);
+
+      $queryBuilder->leftJoin('s.subscriberSegments', 'ssg')
+        ->join('ssg.segment', 'sg')
+        ->andWhere('(ssg.status = :subscribed AND sg.deletedAt IS NOT NULL) OR (ssg.status != :subscribed AND sg.deletedAt IS NULL)')
+        ->andWhere($queryBuilder->expr()->notIn('s.id', $qbSubselect->getDQL()))
+        ->setParameter('subscribed', SubscriberEntity::STATUS_SUBSCRIBED);
       return;
     }
     $segment = $this->entityManager->find(SegmentEntity::class, (int)$filters['segment']);
@@ -234,14 +241,20 @@ class SubscriberListingRepository extends ListingRepository {
       $this->applyGroup($queryBuilder, $group);
     }
 
+    $queryBuilderNoSegmentSubselect = $this->entityManager->createQueryBuilder();
+    $queryBuilderNoSegmentSubselect->select('s2.id')
+      ->from(SubscriberEntity::class, 's2')
+      ->leftJoin('s2.subscriberSegments', 'ssg2', Join::WITH, (string)$queryBuilderNoSegmentSubselect->expr()->eq('ssg2.status', ':subscribed'))
+      ->join('ssg2.segment', 'sg2', Join::WITH, (string)$queryBuilderNoSegmentSubselect->expr()->isNull('sg2.deletedAt'))
+      ->setParameter('subscribed', SubscriberEntity::STATUS_SUBSCRIBED);
     $queryBuilderNoSegment = clone $queryBuilder;
     $subscribersWithoutSegment = $queryBuilderNoSegment
-      ->select('COUNT(s) AS subscribersCount')
-      ->leftJoin('s.subscriberSegments', 'ssg', Join::WITH, (string)$queryBuilderNoSegment->expr()->eq('ssg.status', ':statusSubscribed'))
-      ->leftJoin('ssg.segment', 'sg', Join::WITH, (string)$queryBuilderNoSegment->expr()->isNull('sg.deletedAt'))
-      ->andWhere('s.deletedAt IS NULL')
-      ->andWhere('sg.id IS NULL')
-      ->setParameter('statusSubscribed', SubscriberEntity::STATUS_SUBSCRIBED)
+      ->select('COUNT(DISTINCT s) AS subscribersCount')
+      ->leftJoin('s.subscriberSegments', 'ssg')
+      ->join('ssg.segment', 'sg')
+      ->andWhere('(ssg.status = :subscribed AND sg.deletedAt IS NOT NULL) OR (ssg.status != :subscribed AND sg.deletedAt IS NULL)')
+      ->andWhere($queryBuilder->expr()->notIn('s.id', $queryBuilderNoSegmentSubselect->getDQL()))
+      ->setParameter('subscribed', SubscriberEntity::STATUS_SUBSCRIBED)
       ->getQuery()->getSingleScalarResult();
 
     $subscribersWithoutSegmentLabel = sprintf(
